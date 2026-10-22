@@ -204,12 +204,17 @@ def run_intraday(plan, cfg, cal, src, now, a):
     days = m.by_day(bars)
     trade_day = datetime.date.fromisoformat(plan["trade_date"])
     nslots = 75
-    sessions = [[days[d][i] for i in range(nslots)] for d in sorted(days)
-                if d < trade_day.isoformat() and len(days[d]) == nslots and m.slots_in(cal, datetime.date.fromisoformat(d)) == nslots]
-    if len(sessions) < 20:
-        raise m.MarketError("only %d full past sessions of 5-minute bars for %s; need 20+" % (len(sessions), sym))
     flat_slot = slot_of(cal, trade_day, plan["flat_by"]) if cal.session(trade_day) else 70
     flat_slot = min(flat_slot, nslots - 1)
+    # Only the bars up to flat-by are replayed. Yahoo often leaves the last bars
+    # before 15:30 empty on busy stocks, so those must not throw the day out.
+    need = flat_slot + 1
+    sessions = [[days[d][i] for i in range(need)] for d in sorted(days)
+                if d < trade_day.isoformat() and all(i in days[d] for i in range(need))
+                and m.slots_in(cal, datetime.date.fromisoformat(d)) == nslots]
+    if len(sessions) < 20:
+        raise m.MarketError("only %d complete past sessions (every 5-minute bar to %s) for %s; need 20+"
+                            % (len(sessions), plan["flat_by"], sym))
     if plan.get("trigger_time"):
         k = slot_of(cal, trade_day, plan["trigger_time"])
     else:
@@ -220,7 +225,7 @@ def run_intraday(plan, cfg, cal, src, now, a):
     entry, stop, target = plan["entry"], plan["stop"], plan["target"]
     risk = entry - stop
     qty = ref_qty(cfg, risk, entry)
-    pool = build_pool(sessions, nslots)
+    pool = build_pool(sessions, need)
     sim = simulate(pool, entry, stop, target, k, flat_slot, a.replays, a.seed, a.window,
                    lambda px: cost_r(entry, px, risk, qty, "intraday", cfg["costs"]))
     sim.update({"sessions": len(sessions), "from": sessions[0][0]["date"], "to": sessions[-1][0]["date"]})

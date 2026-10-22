@@ -1,7 +1,9 @@
+import gzip
 import json
+import os
 import unittest
 
-from _util import SkillCase
+from _util import BUNDLE, SkillCase
 
 import indmkt as m
 
@@ -116,6 +118,26 @@ class TestTimeMachine(SkillCase):
         self.assertGreaterEqual(hi, h["avg_r_net"])
         self.assertLess(h["avg_r_net"], h["avg_r_gross"])          # charges always cost something
         self.assertIn(d1["evidence"], ("weak", "mixed", "supportive"))
+
+    def test_empty_bars_after_flat_by_keep_the_day(self):
+        # Yahoo often leaves 15:15 to 15:25 empty on busy stocks; those bars are never replayed
+        with gzip.open(BUNDLE, "rt", encoding="utf-8") as fh:
+            bundle = json.load(fh)
+        res = bundle["chart:DEMOBRK:5m"]["chart"]["result"][0]
+        q = res["indicators"]["quote"][0]
+        for i, ts in enumerate(res["timestamp"]):
+            dt = m.from_ts(ts)
+            if dt.date().isoformat() < "2026-10-21" and (dt.hour, dt.minute) >= (15, 15):
+                for k in ("open", "high", "low", "close"):
+                    q[k][i] = None
+        path = os.path.join(self.tmp, "gappy.json.gz")
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            json.dump(bundle, fh)
+        self.plan()
+        rc, out = self.run_skill("tm", "run", "--replays", "500", "--offline", path,
+                                 now="2026-10-21 10:06", offline=False)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read("odds.json")["simulation"]["sessions"], 60)
 
     def test_seed_changes_simulation(self):
         self.plan()
